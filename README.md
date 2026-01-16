@@ -87,24 +87,9 @@ A real-time BGP (Border Gateway Protocol) monitoring system that collects live I
    - Download: https://nodejs.org/
    - LTS version recommended
 
-5. **Git** (for version control)
-   - Download: https://git-scm.com/downloads/
-
-### System Requirements
-
-- **OS:** Windows 10/11, Linux, or macOS
-- **RAM:** 8GB minimum (16GB recommended)
-- **Disk Space:** 10GB minimum
-- **Network:** Stable internet connection for RIPE RIS Live
-
 ## 📥 Installation
 
 ### 1. Clone the Repository
-
-```bash
-git clone https://github.com/yourusername/bgp-monitoring-system.git
-cd bgp-monitoring-system
-```
 
 ### 2. Database Setup
 
@@ -206,7 +191,7 @@ DB_CONFIG = {
     'port': 5432,
     'database': 'bgp_ensemble_db',
     'user': 'postgres',
-    'password': 'your_password_here'  # ⚠️ Change this!
+    'password': 'your_password_here'  #
 }
 ```
 
@@ -481,34 +466,10 @@ Stop-Process -Id <PID> -Force
 7. **dashboard_api.py** → Serves data to React frontend
 8. **cleanup_old_data.py** → Maintains database (deletes data >30 days)
 
-## 🔐 Security Notes
-
-⚠️ **DO NOT COMMIT:**
-- Database passwords
-- API keys
-- `.env` files
-- Database dumps
-
-The `.gitignore` file excludes sensitive data automatically.
 
 ## 📝 License
 
 MIT License - See LICENSE file for details
-
-## 👥 Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Open a Pull Request
-
-## 📧 Support
-
-For issues, questions, or suggestions:
-- **GitHub Issues:** https://github.com/yourusername/bgp-monitoring-system/issues
-- **Email:** your.email@example.com
 
 ## 🙏 Acknowledgments
 
