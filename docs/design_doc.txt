@@ -1,0 +1,130 @@
+BGP Monitoring System — Technical Design & Production Guidance
+Purpose: This document explains the architecture, detection logic, model features, heuristic thresholds, severity mappings, production risks, and operational workflow for the BGP Monitoring System.
+
+1. High-level system overview
+The BGP Monitoring System integrates heuristic rules, an Isolation Forest statistical detector, an LSTM sequence anomaly detector, and RPKI validation (via a Routinator client). The main functional areas are:
+* Churn Trends Monitoring — time series collection and per-client/peer churn analysis.
+* Top?N Churn Statistics — leaderboard of noisy prefixes/peers/next?hops.
+* Prefix Forensics — per?prefix timeline and diffs for deep investigation.
+* Route Flap Detection — count and pattern classification of announce/withdraw cycles.
+* Path Change Tracking — AS_PATH/next?hop change detection and cause classification.
+* Peer Health Dashboard — live health & flapping statistics for peers.
+* Real?time Anomaly Detection — immediate classification of announcements using heuristics + RPKI + model signals.
+* Message Volume Monitoring — message rate tracking and trending.
+Core detectors and validators used:
+* HeuristicDetector — deterministic rules using thresholds.
+* IsolationForestDetector — statistical outlier detector trained on feature vectors.
+* LSTMDetector — sequence autoencoder to detect unusual temporal patterns.
+* RoutinatorRPKIValidator — Routinator HTTP API client for RPKI validation.
+
+2. Heuristic thresholds and rationale
+The heuristics are set in HeuristicDetector.config with sensible defaults for an ISP / monitoring environment. Each threshold includes rationale and recommended starting point.
+ParameterDefaultRationale & NotesSuggested tuning approachchurn_threshold100 updates/hrFlag when total updates exceed 100/hr for a client/peer. Sets baseline beyond typical noise for many networks.Increase for higher-throughput peers; lower for low-volume. Monitor false positives over 24–72 hours.flap_threshold10 flaps/hrWhen >10 announce/withdraw cycles per hour, treat as flappy.Sensitive to prefix type: more permissive for dynamic prefixes; stricter for transit/customer prefixes.path_length_max15 hopsPaths longer than 15 are unusual and potentially suspicious.For full?mesh long path networks, raise to 25+. Compare with baseline path length distribution.withdrawal_ratio_threshold0.7If withdrawals / announcements > 0.7, indicates instability or mass withdrawal events.Watch for policy-driven withdrawal spikes (planned maintenance) before lowering.message_rate_threshold100000 msg/minUsed for message volume alerts (very high).For small deployments, reduce threshold. This value targets large IX/ISP peers.session_reset_threshold5 resets>5 resets in monitoring window marks a session unstable.Adjust to reflect monitoring window; for extremely stable hardware, set to 1–2.Important: thresholds are starting points. Tuning must be driven by real traffic baselines and iterative adjustment with labeled incidents.
+
+3. Severity classification values
+Severity levels (low, medium, high, critical) are assigned based on anomaly scores and rule triggers across heuristics, Isolation Forest, LSTM, and RPKI validation.
+3.1 Heuristic detectors
+* Low: anomaly score ? 0.3 or rule just exceeded baseline slightly.
+* Medium: 0.3 < score ? 0.6 (moderate instability).
+* High: 0.6 < score ? 0.8 (serious churn, flap, or path anomalies).
+* Critical: >0.8, or direct evidence of hijack/invalid RPKI origin.
+3.2 Isolation Forest
+* Low: normalized score ? 0.5.
+* Medium: 0.5 < score ? 0.8.
+* High: >0.8.
+3.3 LSTM Autoencoder
+* Low: error ? threshold.
+* Medium: threshold < error ? 1.5 × threshold.
+* High: 1.5 × threshold < error ? 2 × threshold.
+* Critical: error > 2 × threshold.
+3.4 RPKI Validator (Routinator)
+* Valid: severity low (no anomaly).
+* Unknown: severity low (no matching ROA).
+* Invalid (AS mismatch): severity critical.
+* Invalid (prefix length > maxLength): severity high.
+
+4. Features used for ML models
+4.1 Isolation Forest — feature vector
+Each training sample is a single-row feature vector extracted by IsolationForestDetector.extract_features:
+1. announcements (count)
+2. withdrawals (count)
+3. total_updates (announcements + withdrawals)
+4. withdrawal_ratio (withdrawals / max(announcements,1))
+5. flap_count (per sample)
+6. path_length (representative path length)
+7. unique_peers (count of peers observed)
+8. message_rate (messages per minute)
+9. session_resets (count)
+Preprocessing: features are standardized with StandardScaler. The Isolation Forest uses decision_function and predictions to derive a normalized anomaly score.
+Labeling / supervision: Isolation Forest is unsupervised; to evaluate detection precision/recall, collect labeled historical incidents and compute metrics offline
+4.2 LSTM Autoencoder — inputs & sequence layout
+* sequence_length (default 10): sliding windows of 10 sequential feature vectors (same features as above).
+* features_dim: 9 (matches Isolation Forest features).
+* Training: model is trained to reconstruct sequences. Reconstruction error distribution (95th percentile) becomes the anomaly threshold.
+* Detection assignment: error for a sequence covering rows i..i+L-1 is attributed to the last row i+L-1 (conservative: flags when pattern completes).
+Notes: - LSTM should be trained using sequences from normal baseline periods or with balanced label handling only. 
+
+5. Model training & data requirements
+5.1 Historical data required
+* Minimum for Isolation Forest: a few hundred representative samples (the demo uses 200). Larger and more diverse datasets improve robustness.
+* LSTM: needs sequences; with seq_len=10, you need >10× number_of_sequences; practical lower bound ~1k rows to be meaningful.
+* Data fields: timestamp, announcements, withdrawals, flap_count, path_length, unique_peers, message_rate, session_resets, as_path (for heuristics).
+5.2 Training steps
+1. Aggregate historical BGP updates into the feature rows.
+2. Train Isolation Forest on standardized features (fit scaler, fit model).
+3. Train LSTM autoencoder on sliding sequences of standardized features (fit scaler used during LSTM training).
+4. Compute and store detection thresholds (e.g. LSTM 95th percentile reconstruction error).
+5. Run offline validation: compute precision/recall vs labeled incidents and inspect false positive cases.
+5.3 Versioning & reproducibility
+* Persist scaler parameters, IsolationForest model, LSTM weights, and training metadata (dataset time window, sample counts, hyperparameters).
+* Keep dataset snapshots for reproducible re-training.
+
+* Minimum IF training set: ~200 samples; larger is better.
+* Minimum LSTM: ~1k rows to form enough sequences.
+* Persist models + scalers for reproducibility.
+
+6. Real-time inference workflow
+1. Ingest BGP updates (OpenBMP/BMP feed) ? parse into canonical update messages.
+2. Enrich: compute derived metrics for the update (total_updates, message_rate estimate, withdrawal_ratio). Optionally enrich with topology data (customer vs transit) and prefix metadata.
+3. Heuristic checks: apply deterministic rules (bogon origin, reserved prefixes, RPKI via Routinator, path length checks).
+4. RPKI: call RoutinatorRPKIValidator.validate_announcement(prefix, origin_as, prefix_length). Use cached results to reduce latency.
+5. Short-term time-series storage: append row to churn_history, flap_history, path_history, peer_history.
+6. Model scoring:
+o Run Isolation Forest on the most recent row (or a small batch) and produce anomaly tag + score.
+o If sufficient history exists, run LSTM and attach sequence anomaly result to the latest timestamp.
+7. Correlation & decision: combine heuristic, IF, LSTM, and RPKI signals into a final classification (NORMAL/SUSPICIOUS/INVALID/HIJACK/LEAK) and severity.
+8. Alerting / persistence: if severity >= high or classification is hijack/route_leak, persist to alert_history and trigger escalation channels (webhook, email, pagerduty).
+9. Operator UI: update dashboards (peer health, top?N, prefix forensics) and persist time-series to long-term datastore for offline analytics.
+Latency considerations: - Heuristic checks and the IsolationForest are low latency (milliseconds) when models and scalers are in memory. - LSTM inference cost depends on model size and will require GPU. Routinator queries must be cached; prefer local Routinator instance and fast LPM (pytricia) if you need thousands of checks/sec.
+
+7. RPKI validation with Routinator
+* The implementation calls a RoutinatorClient to query a Routinator HTTP API (default http://127.0.0.1:8323).
+* Recommended production setup: run a local Routinator instance (secure, updated via RRDP/rsync) on the same network. Keep a small in-memory cache (TTL few seconds) for validation responses.
+* For high-throughput validation, pull VRP dumps and build an in-memory prefix trie (e.g. pytricia) to perform local LPM checks instead of per-request HTTP calls.
+
+8. Deployment considerations
+8.1 Scaling
+Separate responsibilities into microservices:.
+* Model inference service (IF/LSTM) — dedicated, scalable; LSTM will require GPU for heavy loads.
+* RPKI validator — local Routinator instance or vectorized in-memory VRP store.
+.
+9. Risks and mitigations
+9.1 False positives / operator fatigue
+Risk: Too many false positives (from tight heuristics or untrained models) will cause alert fatigue. Mitigations: - Start with higher thresholds; tune using historical labeled incidents. - Aggregate alerts and suppress duplicates within a sliding window.
+9.2 False negatives (missed incidents)
+Risk: Models miss real incidents due to training data not reflecting rare events. Mitigations: - Periodically retrain models with newly labeled data. - Combine multiple signals (heuristic + IF + LSTM + RPKI) — use ensemble rules that escalate if any high-confidence detector fires. Operator can use external feeds (routeviews, third?party watchers) to cross-check.
+9.3 RPKI dependency and network partitioning
+Risk: Routinator unavailability or stale ROAs leads to Unknown judgments or incorrect decisions.
+ Mitigations: - Run local Routinator with automatic updates. - Cache validation results and gracefully fallback to Unknown rather than Invalid when Routinator is unreachable. - Log and monitor Routinator health; alert on sync failures.
+9.4 Model drift
+Risk: As network patterns change, model accuracy decays.
+ Mitigations: - Monitor statistical properties of features (mean/std) and alert on drift. - Schedule regular re-training (weekly/biweekly) and test performance on holdout incidents.
+9.5 Performance & scale
+Risk: LSTM inference or synchronous Routinator HTTP calls create backpressure and increase processing latency.
+Mitigations: - Batch LSTM inference; use GPU or multiple CPU workers. - Replace HTTP per-checks with in-memory lookup (pytricia) or route VRP dumps to match at high QPS. 
+9.6 Security & integrity
+Risk: Alert tampering, attacker poisoning training data, or stolen ROA dumps. Mitigations: - Harden access to training data and model artifacts. - Sign and version model artifacts; verify before deployment. - Use secure channels (HTTPS, internal network) for Routinator and BMP ingest.
+
+10. Decision matrix (quick reference) — with exact numeric ranges
+Anomaly TypeSource(s)Exact numeric range / conditionRecommended SeverityNotesRPKI Origin MismatchRoutinatororigin_as != ROA.origin_asCriticalHijack signal.RPKI MaxLength ViolationRoutinatorprefix_length > ROA.max_lengthHighLeak/config error.RPKI UnknownRoutinatorNo ROA matchLowInformational.Bogon ASN in originHeuristic64512–65534 or 4200000000–4294967294CriticalStrong signal.Path length mildHeuristic16–25 hopsMediumCheck topology.Path length severeHeuristic>25 hopsHighPossible loops.Path inflation highHeuristic?length >5HighSuspicious.Path inflation criticalHeuristic?length >10CriticalEscalate.Churn moderateHeuristic101–500/hrMediumMonitor.Churn severeHeuristic501–2000/hrHighInstability.Churn criticalHeuristic>2000/hrCriticalSevere event.Withdrawal ratio highHeuristic0.70–0.90HighSerious instability.Withdrawal ratio criticalHeuristic>0.90CriticalMass withdrawals.Flapping mediumHeuristic11–30/hrMediumInstability.Flapping highHeuristic31–100/hrHighSerious instability.Flapping criticalHeuristic>100/hrCriticalSevere misbehavior.IF lowIsolation Forestscore ?0.5LowWeak signal.IF mediumIsolation Forest0.5–0.8MediumOutlier.IF highIsolation Forest0.8–0.95HighStrong anomaly.IF criticalIsolation Forest>0.95CriticalVery strong anomaly.LSTM lowLSTMerror ?1.0×thrLowNormal variation.LSTM mediumLSTM1.0–1.5×thrMediumMild anomaly.LSTM highLSTM1.5–2.0×thrHighStrong anomaly.LSTM criticalLSTM>2.0×thrCriticalExtreme deviation.Volume spike highVolume monitor100k–500k msg/minHighMay stress devices.Volume spike criticalVolume monitor>500k msg/minCriticalSevere overload.Session resets mediumBMP6–10MediumInvestigate.Session resets highBMP11–50HighPersistent instability.Session resets criticalBMP>50CriticalDoS-level issue.Multi-source mediumCorrelation2 sourcesMediumStronger evidence.Multi-source highCorrelation3 sourcesHighBroad evidence.Multi-source criticalCorrelation?4 sourcesCriticalSevere systemic issue.Single weak signalAnyIsolated low scoreLowDo not escalate immediately.
+

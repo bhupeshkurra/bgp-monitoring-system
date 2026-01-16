@@ -1,0 +1,28 @@
+# BGP Monitoring System - Python Dependencies
+# Python 3.11+ required
+
+# Database
+psycopg2-binary==2.9.9    # PostgreSQL adapter (binary distribution for Windows)
+psycopg>=3.1.0           # PostgreSQL adapter (psycopg3)
+
+# WebSocket for RIS Live
+websocket-client==1.7.0   # BGP data collection from RIPE RIS Live
+
+# HTTP Requests
+requests==2.31.0          # RPKI validator API calls to Routinator
+
+# Machine Learning
+tensorflow==2.15.0        # LSTM model for anomaly detection
+scikit-learn==1.4.0       # Isolation Forest model
+numpy==1.26.3             # Numerical operations
+pandas==2.1.4             # Data manipulation
+
+# Dashboard API
+Flask==3.0.0              # Web framework for REST API
+Flask-CORS==4.0.0         # Cross-Origin Resource Sharing support
+flask-socketio==5.3.6     # WebSocket support for real-time updates
+python-socketio==5.11.1   # Socket.IO protocol implementation
+eventlet==0.35.2          # Async networking library for SocketIO
+
+# Optional: Logging & Monitoring
+# python-json-logger==2.0.7  # Structured logging (if needed)

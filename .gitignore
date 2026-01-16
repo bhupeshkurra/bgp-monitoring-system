@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+
+# Database
+*.db
+*.sqlite
+*.sql.backup
+bgp_backup.dump
+
+# Logs
+*.log
+logs/
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+frontend/build/
+frontend/.next/
+frontend/dist/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Archive files
+archive_old_scripts/
+backup_*/
+
+# Sensitive data - DO NOT COMMIT
+insertion_script_fixed.sql
+populate_l3vpn_only.sql
+insertion script.txt
+
+# Historical database experiments - DO NOT COMMIT
+*historical*.sql
+*historical*.dump
+bgp_historical_db*
+
+# Database backups - DO NOT COMMIT
+*.dump
+*.backup
+*.sql.gz
+
+# Docker volumes
+data/
